@@ -1,0 +1,744 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NYC School Route Simulator (Max Pickup Distance Constraint)</title>
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+     integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+     crossorigin=""/>
+
+    {/* Using Tailwind CDN directly for simplicity */}
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <script>
+      // Configure Tailwind - important for CDN use
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['Inter', 'sans-serif'],
+            },
+          }
+        }
+      }
+    </script>
+
+    {/* Load Leaflet JS */}
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+     integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+     crossorigin=""></script>
+
+    {/* Load Chart.js */}
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+     <style>
+      /* Load Lucide Icons font */
+      @font-face {
+        font-family: 'LucideIcons';
+        /* Ensure the font can be loaded from the CDN */
+        src: url(https://cdn.jsdelivr.net/npm/lucide-static@latest/font/Lucide.ttf) format('truetype');
+      }
+      .lucide {
+        font-family: 'LucideIcons'; font-size: 1.25rem; line-height: 1;
+        display: inline-block; vertical-align: middle;
+      }
+      /* Map and Chart styling */
+      #map { height: 400px; }
+      #chartContainer { height: 350px; position: relative; }
+      canvas#efficiencyChart { width: 100% !important; height: 100% !important; }
+
+      /* Button styling using Tailwind */
+      .control-button { @apply bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg shadow-md transition duration-150 ease-in-out flex items-center justify-center gap-2; }
+      .control-button.stop { @apply bg-red-600 hover:bg-red-700; }
+      .control-button:disabled { @apply bg-gray-400 cursor-not-allowed opacity-75; }
+      /* Adjust default Leaflet marker size */
+      .leaflet-marker-icon { width: 20px !important; height: 20px !important; margin-left: -10px !important; margin-top: -10px !important; }
+
+      /* Constraints list styling */
+      .constraints-list li { @apply mb-1; }
+      .constraints-list strong { @apply font-semibold text-gray-700; }
+    </style>
+    {/* Optional: Add Inter font link if Tailwind doesn't load it reliably */}
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+</head>
+<body class="bg-gray-100 font-sans p-4 md:p-8">
+
+    <div class="container mx-auto max-w-6xl bg-white rounded-lg shadow-xl p-6">
+        <h1 class="text-3xl font-bold text-gray-800 mb-6 text-center">NYC School Route Simulator</h1>
+
+        {/* Simulation control buttons */}
+        <div class="flex justify-center gap-4 mb-6">
+            <button id="startButton" class="control-button">
+                {/* Lucide Play icon */}
+                <span class="lucide">&#xea17;</span> <span>Start Simulation</span>
+            </button>
+            <button id="stopButton" class="control-button stop" disabled>
+                 {/* Lucide Square icon */}
+                 <span class="lucide">&#xeb1b;</span> <span>Stop Simulation</span>
+            </button>
+        </div>
+
+        {/* Status display areas */}
+        <div id="status" class="text-center mb-6 p-3 bg-gray-200 rounded-lg text-gray-700 min-h-[3rem] flex items-center justify-center transition-colors duration-300">
+            Waiting to start simulation...
+        </div>
+         <div id="detailStatus" class="text-center text-sm text-gray-500 mb-4 min-h-[1.25rem]">
+             &nbsp; </div>
+
+
+        {/* Map and Chart layout */}
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+                <h2 class="text-xl font-semibold text-gray-700 mb-3">Feasible Routes Map</h2>
+                <div id="map" class="rounded-lg border border-gray-300 shadow-sm"></div>
+            </div>
+            <div>
+                <h2 class="text-xl font-semibold text-gray-700 mb-3">Feasible Routes & Frontier (Distance vs. Turns)</h2>
+                <div id="chartContainer" class="rounded-lg border border-gray-300 shadow-sm p-2">
+                    <canvas id="efficiencyChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+         {/* Simulation Statistics Display */}
+         <div class="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg shadow-sm">
+            <h3 class="text-lg font-semibold text-blue-800 mb-2">Simulation Stats</h3>
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-sm">
+                <div><span class="font-medium">Total Runs:</span> <span id="totalRuns">0</span></div>
+                <div><span class="font-medium">Feasible Routes:</span> <span id="feasibleRoutes">0</span></div>
+                <div><span class="font-medium">Frontier Points:</span> <span id="frontierPoints">0</span></div>
+                <div><span class="font-medium">Min Turns:</span> <span id="minTurns">-</span></div>
+                <div><span class="font-medium">Min Farthest Pickup Dist (km):</span> <span id="minFarthestDist">-</span></div>
+                <div class="col-span-2"><span class="font-medium">Avg Feasible Pickups:</span> <span id="avgPickupsStat">-</span></div>
+                <div class="col-span-2"><span class="font-medium">Avg Feasible Schools:</span> <span id="avgSchoolsStat">-</span></div>
+                <div class="col-span-2"><span class="font-medium">Avg Feasible Turns:</span> <span id="avgTurnsStat">-</span></div>
+                <div class="col-span-2"><span class="font-medium">Avg Feasible Duration (min):</span> <span id="avgDurationStat">-</span></div>
+                <div class="col-span-2"><span class="font-medium">Avg Farthest Pickup Dist (km):</span> <span id="avgFarthestDistStat">-</span></div>
+                <div class="col-span-2"><span class="font-medium">Current Bias Probability:</span> <span id="biasProbStat">-</span>%</div>
+            </div>
+        </div>
+
+        {/* Constraints and Assumptions Display */}
+        <div class="mt-6 p-4 bg-gray-50 border border-gray-200 rounded-lg shadow-sm">
+             <h3 class="text-lg font-semibold text-gray-800 mb-2">Constraints & Assumptions</h3>
+            <ul class="list-disc list-inside text-sm text-gray-600 constraints-list">
+                <li><strong>Route Sequence:</strong> Depot &rarr; All Pickups (P1...Pn) &rarr; All Schools (S1...Sm).</li>
+                <li><strong>Depot Location:</strong> Fixed at <code id="depotCoords">Loading...</code></li>
+                <li><strong>Stop Locations:</strong> Randomly generated within approximate NYC 5 Borough bounding boxes.</li>
+                <li><strong>Pickups per Route:</strong> <span id="pickupRange">3</span>-<span id="maxPickups">15</span></li>
+                <li><strong>Schools per Route:</strong> <span id="schoolRange">1</span>-<span id="maxSchools">6</span> (and always &le; # Pickups)</li>
+                <li><strong>Max Depot-to-Farthest-Pickup Distance:</strong> <span id="maxPickupDistConstraint">15</span> miles (straight line).</li>
+                <li><strong>First Pickup Time:</strong> Between <span id="pickupTimeRange">6:15 AM - 6:59 AM</span></li>
+                {/* School session time display will be updated dynamically by populateConstraintsDisplay */}
+                <li><strong>First School Session Time:</strong> Between <span id="schoolTimeRange">Loading...</span> (Schools visited in order of session time).</li>
+                <li><strong>Max Travel (First Pickup to First School):</strong> 120 minutes</li>
+                <li><strong>Wait Times:</strong> Max <span id="waitP1">3</span> min at first pickup, <span id="waitSubseq">1</span> min at subsequent pickups.</li>
+                <li><strong>Feasibility Checks:</strong> Route must meet Max Pickup Distance AND arrive on-time at P1 AND on-time at S1 AND meet P1&rarr;S1 travel time limit.</li>
+                <li><strong>Routing Engine:</strong> OSRM Demo Server (<code>router.project-osrm.org</code>)</li>
+                <li><strong>OSRM Profile:</strong> Driving</li>
+                <li><strong>Highway Travel:</strong> Allowed (Default for Driving Profile)</li>
+                <li><strong>Optimization Goal:</strong> Find routes minimizing Farthest Pickup Distance and Turns (visualized on chart).</li>
+                <li><strong>Learning Heuristic:</strong> Biases generation of stop counts based on averages from past feasible routes, adjusting bias strength based on turns/duration/farthest distance performance (calculated up to S1).</li>
+            </ul>
+        </div>
+
+    </div>
+
+    <script>
+        // --- Configuration ---
+        const FIXED_DEPOT_LAT = 40.728060568411195;
+        const FIXED_DEPOT_LON = -73.94056110208713;
+        const MILES_TO_KM = 1.60934;
+        const MAX_DEPOT_FARTHEST_PICKUP_MILES = 15;
+        const MAX_DEPOT_FARTHEST_PICKUP_KM = MAX_DEPOT_FARTHEST_PICKUP_MILES * MILES_TO_KM;
+
+        const BOROUGH_BOUNDS = [ /* Borough bounds array */
+            { name: "Manhattan", minLat: 40.69, maxLat: 40.88, minLon: -74.02, maxLon: -73.92 },
+            { name: "Brooklyn",  minLat: 40.57, maxLat: 40.74, minLon: -74.04, maxLon: -73.85 },
+            { name: "Queens",    minLat: 40.55, maxLat: 40.80, minLon: -73.96, maxLon: -73.70 },
+            { name: "Bronx",     minLat: 40.79, maxLat: 40.92, minLon: -73.94, maxLon: -73.76 },
+            { name: "Staten Island", minLat: 40.49, maxLat: 40.65, minLon: -74.26, maxLon: -74.05 }
+        ];
+        const MIN_PICKUPS = 3;
+        const MAX_PICKUPS = 15;
+        const MAX_SCHOOLS = 6;
+        const MAX_WAIT_FIRST_PICKUP_MINS = 3;
+        const MAX_WAIT_SUBSEQUENT_PICKUP_MINS = 1;
+        const MAX_TRAVEL_TIME_P1_TO_S1_MINS = 120;
+        const FIRST_PICKUP_START_TIME = "06:15";
+        const FIRST_PICKUP_END_TIME = "07:00";
+        // School time constants (as updated previously)
+        const SCHOOL_SESSION_START_TIME = "08:30";
+        const SCHOOL_SESSION_END_TIME = "09:01"; // Use 9:01 to include 9:00 in getRandomTimeInRange
+
+        const OSRM_API_URL = "https://router.project-osrm.org/route/v1/driving/";
+        const SIMULATION_DELAY_MS = 750; // Delay between simulation steps
+        const BASE_LEARNING_BIAS_PROBABILITY = 0.3; // Initial chance to use biased generation
+        const MIN_BIAS_PROBABILITY = 0.1; // Minimum bias probability
+        const MAX_BIAS_PROBABILITY = 0.7; // Maximum bias probability
+        const BIAS_ADJUSTMENT_STEP = 0.05; // How much to adjust bias probability
+        // Colors for drawing different routes on the map
+        const ROUTE_COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f97316', '#8b5cf6', '#eab308', '#22c55e', '#06b6d4', '#d946ef', '#64748b'];
+
+        // --- DOM Elements ---
+        // Get references to HTML elements for interaction
+        const startButton = document.getElementById('startButton');
+        const stopButton = document.getElementById('stopButton');
+        const statusDiv = document.getElementById('status');
+        const detailStatusDiv = document.getElementById('detailStatus');
+        const mapDiv = document.getElementById('map');
+        const chartCanvas = document.getElementById('efficiencyChart');
+        // Stat Spans
+        const totalRunsSpan = document.getElementById('totalRuns');
+        const feasibleRoutesSpan = document.getElementById('feasibleRoutes');
+        const frontierPointsSpan = document.getElementById('frontierPoints');
+        const minTurnsSpan = document.getElementById('minTurns');
+        const minFarthestDistSpan = document.getElementById('minFarthestDist');
+        const avgPickupsStatSpan = document.getElementById('avgPickupsStat');
+        const avgSchoolsStatSpan = document.getElementById('avgSchoolsStat');
+        const avgTurnsStatSpan = document.getElementById('avgTurnsStat');
+        const avgDurationStatSpan = document.getElementById('avgDurationStat');
+        const avgFarthestDistStatSpan = document.getElementById('avgFarthestDistStat');
+        const biasProbStatSpan = document.getElementById('biasProbStat');
+        // Constraint Spans (for displaying values)
+        const depotCoordsSpan = document.getElementById('depotCoords');
+        const pickupRangeSpan = document.getElementById('pickupRange');
+        const maxPickupsSpan = document.getElementById('maxPickups');
+        const schoolRangeSpan = document.getElementById('schoolRange');
+        const maxSchoolsSpan = document.getElementById('maxSchools');
+        const maxPickupDistConstraintSpan = document.getElementById('maxPickupDistConstraint');
+        const pickupTimeRangeSpan = document.getElementById('pickupTimeRange');
+        const schoolTimeRangeSpan = document.getElementById('schoolTimeRange');
+        const waitP1Span = document.getElementById('waitP1');
+        const waitSubseqSpan = document.getElementById('waitSubseq');
+
+
+        // --- State Variables ---
+        // Variables to hold the state of the simulation and UI elements
+        let map = null; // Leaflet map instance
+        let chart = null; // Chart.js instance
+        let simulationRunning = false; // Flag to control simulation loop
+        let simulationTimeoutId = null; // ID for setTimeout, used to stop the loop
+        let routeLayerGroup = null; // Leaflet layer group to hold route drawings
+        let routeColorIndex = 0; // Index for cycling through ROUTE_COLORS
+        let feasibleRouteData = []; // Array to store {x, y} data for the chart's feasible points
+        let currentBiasProbability = BASE_LEARNING_BIAS_PROBABILITY; // Current probability for biased generation
+        // Object to store simulation statistics
+        let stats = {
+            totalRuns: 0, feasibleRoutes: 0, minTurns: Infinity, minFarthestDist: Infinity,
+            totalFeasiblePickups: 0, totalFeasibleSchools: 0,
+            totalFeasibleTurns: 0, totalFeasibleDuration: 0, totalFeasibleFarthestDist: 0,
+            avgPickups: (MIN_PICKUPS + MAX_PICKUPS) / 2, // Initial average guess
+            avgSchools: (1 + MAX_SCHOOLS) / 2, // Initial average guess
+            avgTurns: null, avgDuration: null, avgFarthestDist: null,
+            efficientFrontierPoints: [] // Array to store {x, y} points on the frontier
+        };
+        let biasedGenerationUsed = false; // Flag to track if bias was used in the current step
+
+        // --- Utility Functions ---
+        /** Generates a random float between min (inclusive) and max (exclusive) */
+        function getRandomCoord(min, max) { return Math.random() * (max - min) + min; }
+        /** Generates a random integer between min and max (inclusive) */
+        function getRandomInt(min, max) { min = Math.ceil(min); max = Math.floor(max); return Math.floor(Math.random() * (max - min + 1)) + min; }
+        /** Generates random lat/lon coordinates within a randomly chosen borough's bounds */
+        function getRandomBoroughCoord() { const i = getRandomInt(0, BOROUGH_BOUNDS.length - 1); const b = BOROUGH_BOUNDS[i]; return { lat: getRandomCoord(b.minLat, b.maxLat), lon: getRandomCoord(b.minLon, b.maxLon) }; }
+        /** Generates a random integer, potentially biased towards a target average */
+        function getBiasedRandomInt(min, max, targetAvg, biasProbability) {
+            if (min > max) { console.warn(`BiasedRandomInt: min (${min}) > max (${max}). Returning min.`); return min; }
+            if (min === max) { return min; }
+            // Decide whether to use biased generation based on probability
+            if (Math.random() < currentBiasProbability && targetAvg !== null) {
+                biasedGenerationUsed = true; // Mark that bias was used
+                // Define a smaller range around the target average
+                const halfRange = Math.max(1, Math.floor((max - min) / 4));
+                const biasedMin = Math.max(min, Math.round(targetAvg) - halfRange);
+                const biasedMax = Math.min(max, Math.round(targetAvg) + halfRange);
+                // Ensure min <= max
+                const finalMin = Math.min(biasedMin, biasedMax);
+                const finalMax = Math.max(biasedMin, biasedMax);
+                return getRandomInt(finalMin, finalMax);
+            } else {
+                biasedGenerationUsed = false; // Mark that bias was not used
+                return getRandomInt(min, max); // Generate uniformly random int
+            }
+        }
+        /** Converts "HH:MM" time string to total minutes since midnight */
+        function timeToMinutes(timeStr) { const [h, m] = timeStr.split(':').map(Number); return h * 60 + m; }
+        /** Converts total minutes since midnight to "HH:MM" time string */
+        function minutesToTime(totalMinutes) { const h = Math.floor(totalMinutes / 60) % 24; const m = totalMinutes % 60; return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`; }
+        /** Generates a random "HH:MM" time string within a given range (inclusive start, exclusive end) */
+        function getRandomTimeInRange(startStr, endStr) { const startMinutes = timeToMinutes(startStr); const endMinutes = timeToMinutes(endStr); if (startMinutes >= endMinutes) { console.error("Invalid time range", startStr, endStr); return startStr; } const randomTotalMinutes = getRandomInt(startMinutes, endMinutes - 1); return minutesToTime(randomTotalMinutes); }
+        /** Adds minutes to a "HH:MM" time string, returning the new "HH:MM" string */
+        function addMinutesToTime(timeStr, minutesToAdd) { const totalMinutes = timeToMinutes(timeStr) + minutesToAdd; return minutesToTime(totalMinutes); }
+        /** Calculates the Haversine distance between two lat/lon points */
+        function calculateHaversineDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371; // Earth radius in kilometers
+            const dLat = (lat2 - lat1) * Math.PI / 180; // Convert degrees to radians
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a =
+                Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                Math.sin(dLon / 2) * Math.sin(dLon / 2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            const distance = R * c; // Distance in km
+            return distance;
+        }
+
+        // --- OSRM API Call ---
+        /** Fetches route data from OSRM for a given set of coordinates */
+         async function getRoute(coords) {
+             // Ensure at least two points are provided
+             if (!coords || coords.length < 2) { console.error("Insufficient coordinates."); return null; }
+             // Format coordinates for OSRM API (lon,lat;lon,lat;...)
+             const waypoints = coords.map(c => `${c[0]},${c[1]}`).join(';');
+             // Construct the API URL
+             const url = `${OSRM_API_URL}${waypoints}?overview=full&steps=true&geometries=geojson`;
+             try {
+                 const response = await fetch(url);
+                 // Handle API errors (e.g., 4xx, 5xx)
+                  if (!response.ok) {
+                      const errorText = await response.text(); console.error(`OSRM API Error ${response.status}: ${errorText}`);
+                      let userMessage = `OSRM API request failed (Status ${response.status}).`;
+                      if (response.status === 429) userMessage += " Rate limit likely exceeded."; // Specific message for rate limiting
+                      throw new Error(userMessage);
+                  }
+                 const data = await response.json();
+                 // Handle OSRM-specific errors (e.g., "NoRoute")
+                 if (data.code !== 'Ok' || !data.routes || data.routes.length === 0) { console.error("OSRM API Error:", data.message || "No route found"); throw new Error(`Invalid route data from OSRM: ${data.message || data.code}`); }
+                 const route = data.routes[0];
+                 // Calculate approximate number of turns (sum of steps per leg minus 1)
+                 const turns = route.legs.reduce((acc, leg) => acc + leg.steps.length - 1, 0);
+                 // Ensure geometry data is present
+                 if (!route.geometry || !route.geometry.coordinates || route.geometry.coordinates.length === 0) { console.error("OSRM API Error: Geometry missing"); throw new Error("Geometry missing in OSRM route response"); }
+                 // Return relevant route information
+                 return { duration: route.duration, distance: route.distance, geometry: route.geometry, turns: turns > 0 ? turns : 0 };
+             } catch (error) {
+                 // Catch fetch errors or errors thrown above
+                 console.error("Error fetching/processing OSRM route:", error);
+                 statusDiv.textContent = `Error fetching route: ${error.message}`;
+                 statusDiv.className = 'text-center mb-6 p-3 rounded-lg min-h-[3rem] flex items-center justify-center transition-colors duration-300 bg-red-200 text-red-800';
+                 if (error.message.includes("429")) stopSimulation(); // Stop simulation if rate limited
+                 return null; // Indicate failure
+             }
+         }
+
+        // --- Map Functions ---
+        /** Initializes the Leaflet map if it hasn't been already */
+        function initializeMap() {
+            if (map) return; // Don't re-initialize
+            try {
+                map = L.map(mapDiv).setView([FIXED_DEPOT_LAT, FIXED_DEPOT_LON], 11); // Create map centered on depot
+                // Add OpenStreetMap tile layer
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' }).addTo(map);
+                // Create a layer group to hold all route markers and lines
+                routeLayerGroup = L.layerGroup().addTo(map);
+            } catch (error) { console.error("Error initializing Leaflet map:", error); statusDiv.textContent = "Error initializing map."; statusDiv.className = 'text-center mb-6 p-3 rounded-lg min-h-[3rem] flex items-center justify-center transition-colors duration-300 bg-red-200 text-red-800'; }
+        }
+        /** Clears all markers and routes from the map */
+        function clearMap() { if (routeLayerGroup) routeLayerGroup.clearLayers(); routeColorIndex = 0; if(map) map.setView([FIXED_DEPOT_LAT, FIXED_DEPOT_LON], 11); } // Reset view
+        /** Displays a single feasible route (markers and line) on the map */
+        function displayRouteOnMap(depot, pickups, schools, routeGeometry) {
+             if (!map || !routeLayerGroup || !routeGeometry) return; // Ensure map and data are ready
+             try {
+                 // Create a feature group for this specific route's elements
+                 const currentRouteFeatureGroup = L.featureGroup().addTo(routeLayerGroup);
+                 // Define custom icons using Lucide SVGs hosted on CDN
+                 const depotIcon = L.icon({ iconUrl: 'https://cdn.jsdelivr.net/npm/lucide-static@latest/icons/home.svg', iconSize: [20, 20]});
+                 const pickupIcon = L.icon({ iconUrl: 'https://cdn.jsdelivr.net/npm/lucide-static@latest/icons/user.svg', iconSize: [20, 20]});
+                 const schoolIcon = L.icon({ iconUrl: 'https://cdn.jsdelivr.net/npm/lucide-static@latest/icons/school.svg', iconSize: [20, 20]});
+
+                 // Add markers for depot, pickups, and schools
+                 L.marker([depot.lat, depot.lon], {icon: depotIcon}).addTo(currentRouteFeatureGroup).bindPopup("Depot");
+                 pickups.forEach((p, i) => L.marker([p.lat, p.lon], {icon: pickupIcon}).addTo(currentRouteFeatureGroup).bindPopup(`Pickup ${i+1}`));
+                 schools.forEach((s, i) => L.marker([s.lat, s.lon], {icon: schoolIcon}).addTo(currentRouteFeatureGroup).bindPopup(`School ${i+1}<br>Session: ${s.sessionTime}`));
+                 // Get the next color for the route line
+                 const routeColor = ROUTE_COLORS[routeColorIndex % ROUTE_COLORS.length]; routeColorIndex++;
+                 // Add the route line using the GeoJSON geometry from OSRM
+                 const routeLine = L.geoJSON(routeGeometry, { style: { color: routeColor, weight: 4, opacity: 0.65 } }).addTo(currentRouteFeatureGroup);
+                 // Fit the map view to the bounds of the newly added route, with padding
+                 if (currentRouteFeatureGroup.getBounds().isValid()) {
+                    map.fitBounds(currentRouteFeatureGroup.getBounds().pad(0.1));
+                 } else {
+                    console.warn("Could not fit map bounds for the latest feasible route.");
+                 }
+             } catch(error) { console.error("Error displaying feasible route on map:", error); statusDiv.textContent = "Error displaying route on map."; statusDiv.className = 'text-center mb-6 p-3 rounded-lg min-h-[3rem] flex items-center justify-center transition-colors duration-300 bg-yellow-200 text-yellow-800'; }
+        }
+
+        // --- Efficient Frontier Logic ---
+        /** Checks if point p1 dominates point p2 (better or equal in both axes, strictly better in at least one) */
+        function dominates(p1, p2) { const betterOrEqual = p1.x <= p2.x && p1.y <= p2.y; const strictlyBetter = p1.x < p2.x || p1.y < p2.y; return betterOrEqual && strictlyBetter; }
+        /** Updates the efficient frontier with a new point, removing dominated points */
+        function updateEfficientFrontier(newPoint) {
+            // Check if the new point is dominated by any existing frontier point
+            for (const existingPoint of stats.efficientFrontierPoints) { if (dominates(existingPoint, newPoint)) return false; } // Dominated, don't add
+            // Remove existing frontier points that are dominated by the new point
+            stats.efficientFrontierPoints = stats.efficientFrontierPoints.filter(existingPoint => !dominates(newPoint, existingPoint));
+            // Add the new non-dominated point
+            stats.efficientFrontierPoints.push(newPoint);
+            // Keep the frontier sorted by the x-axis (distance)
+            stats.efficientFrontierPoints.sort((a, b) => a.x - b.x);
+            return true; // Point was added to the frontier
+        }
+
+        // --- Chart Functions ---
+        /** Initializes the Chart.js scatter plot if it hasn't been already */
+        function initializeChart() {
+             if (chart) return; // Don't re-initialize
+             try {
+                 const ctx = chartCanvas.getContext('2d');
+                 chart = new Chart(ctx, {
+                     type: 'scatter', // Scatter plot for distance vs. turns
+                     data: {
+                         datasets: [
+                             { label: 'Feasible Routes', data: feasibleRouteData, backgroundColor: 'rgba(59, 130, 246, 0.4)', borderColor: 'rgba(37, 99, 235, 0.6)', borderWidth: 1, pointRadius: 4, pointHoverRadius: 6 },
+                             { label: 'Efficient Frontier', data: stats.efficientFrontierPoints, backgroundColor: 'rgba(239, 68, 68, 0.7)', borderColor: 'rgba(185, 28, 28, 1)', borderWidth: 1, pointRadius: 6, pointHoverRadius: 8, showLine: false } // Don't connect frontier points with a line
+                         ]
+                     },
+                     options: {
+                         responsive: true, maintainAspectRatio: false, // Allow chart to resize
+                         scales: {
+                             x: { type: 'linear', position: 'bottom', title: { display: true, text: 'Depot-to-Farthest-Pickup Distance (km)', font: { size: 14 } }, beginAtZero: true, suggestedMin: 0 },
+                             y: { title: { display: true, text: 'Number of Turns', font: { size: 14 } }, beginAtZero: true, suggestedMin: 0 }
+                         },
+                         plugins: {
+                             // Customize tooltips
+                             tooltip: { callbacks: { label: function(context) { const label = context.dataset.label || ''; const point = context.parsed; return `${label}: Dist=${point.x.toFixed(1)} km, Turns=${point.y}`; } } },
+                             legend: { position: 'top' } // Position legend at the top
+                         }
+                     }
+                 });
+             } catch (error) { console.error("Error initializing Chart.js:", error); statusDiv.textContent = "Error initializing chart."; statusDiv.className = 'text-center mb-6 p-3 rounded-lg min-h-[3rem] flex items-center justify-center transition-colors duration-300 bg-red-200 text-red-800'; }
+         }
+        /** Adds a new data point to the chart and updates the efficient frontier dataset */
+        function updateChart(distance, turns) {
+            if (!chart) return false;
+            const newPoint = { x: distance, y: turns };
+            feasibleRouteData.push(newPoint); // Add to the general feasible data
+            // Update the frontier and check if this point was added
+            const addedToFrontier = updateEfficientFrontier(newPoint);
+            // Update chart data sources
+            chart.data.datasets[0].data = feasibleRouteData;
+            chart.data.datasets[1].data = stats.efficientFrontierPoints;
+            chart.update(); // Redraw the chart
+            return addedToFrontier;
+        }
+
+        // --- Simulation Logic ---
+        /** Performs a single step of the route generation and validation simulation */
+        async function runSimulationStep() {
+            if (!simulationRunning) return; // Stop if flag is false
+
+            stats.totalRuns++; // Increment run counter
+            let detailMessage = "&nbsp;"; // Reset detail message
+            biasedGenerationUsed = false; // Reset bias flag for this run
+            // Update status display
+            statusDiv.textContent = `Running simulation #${stats.totalRuns}... Generating route...`;
+            statusDiv.className = 'text-center mb-6 p-3 rounded-lg min-h-[3rem] flex items-center justify-center transition-colors duration-300 bg-gray-200 text-gray-700';
+
+            // 1. Define Depot & Generate Stops
+            const depot = { lat: FIXED_DEPOT_LAT, lon: FIXED_DEPOT_LON };
+            // Generate number of pickups, potentially biased by past feasible routes
+            const numPickups = getBiasedRandomInt(MIN_PICKUPS, MAX_PICKUPS, stats.avgPickups, currentBiasProbability);
+            let biasUsedMsg = biasedGenerationUsed ? "(Biased Pickups) " : "";
+            // Ensure number of schools is valid (>=1, <= MAX_SCHOOLS, <= numPickups)
+            const effectiveMaxSchools = Math.max(1, Math.min(MAX_SCHOOLS, numPickups));
+            // Generate number of schools, potentially biased
+            const numSchools = getBiasedRandomInt(1, effectiveMaxSchools, stats.avgSchools, currentBiasProbability);
+            // Update bias message if school generation was biased
+            if (biasedGenerationUsed && !biasUsedMsg) biasUsedMsg = "(Biased Schools)"; else if (biasedGenerationUsed) biasUsedMsg += "(Biased Schools)";
+            if (biasUsedMsg) detailMessage = `Learning: ${biasUsedMsg}`;
+
+            // Basic check for invalid generation (should be rare due to getBiasedRandomInt logic)
+            if (numSchools > numPickups || numSchools > MAX_SCHOOLS || numPickups < MIN_PICKUPS) {
+                 console.warn(`Constraint violation: P=${numPickups}, S=${numSchools}. Skipping.`);
+                 detailStatusDiv.textContent = "Constraint violation during generation. Skipping.";
+                 if (simulationRunning) simulationTimeoutId = setTimeout(runSimulationStep, SIMULATION_DELAY_MS / 2); // Schedule next run quickly
+                 return;
+            }
+            // Generate random coordinates for pickups and schools
+            const pickups = Array.from({ length: numPickups }, () => getRandomBoroughCoord());
+            const schools = Array.from({ length: numSchools }, () => ({ ...getRandomBoroughCoord(), sessionTime: getRandomTimeInRange(SCHOOL_SESSION_START_TIME, SCHOOL_SESSION_END_TIME) }));
+            // Sort schools by session time (required by constraints)
+            schools.sort((a, b) => timeToMinutes(a.sessionTime) - timeToMinutes(b.sessionTime));
+
+            // --- Feasibility Check 0 (Depot -> Farthest Pickup Distance) ---
+            let maxDist = 0;
+            // Calculate Haversine distance from depot to each pickup
+            for (const pickup of pickups) {
+                const dist = calculateHaversineDistance(depot.lat, depot.lon, pickup.lat, pickup.lon);
+                if (dist > maxDist) {
+                    maxDist = dist; // Keep track of the maximum distance found
+                }
+            }
+            const depotToFarthestPickupDist = maxDist; // This is the value we need to check
+
+            // Check against the maximum allowed distance constraint (in KM)
+            if (depotToFarthestPickupDist > MAX_DEPOT_FARTHEST_PICKUP_KM) {
+                // Route is infeasible due to this constraint
+                statusDiv.textContent = `Run #${stats.totalRuns}: Infeasible - Farthest pickup distance (${depotToFarthestPickupDist.toFixed(1)} km) > max (${MAX_DEPOT_FARTHEST_PICKUP_KM.toFixed(1)} km).`;
+                statusDiv.className = 'text-center mb-6 p-3 rounded-lg min-h-[3rem] flex items-center justify-center transition-colors duration-300 bg-yellow-200 text-yellow-800'; // Yellow for distance infeasibility
+                detailStatusDiv.innerHTML = "&nbsp;";
+                updateStatsUI(); // Update total runs display
+                if (simulationRunning) simulationTimeoutId = setTimeout(runSimulationStep, SIMULATION_DELAY_MS); // Schedule next run
+                return; // Stop processing this route
+            }
+            // --- End of Feasibility Check 0 ---
+
+
+            // 2. Generate Times
+            // Randomly select the required arrival time for the first pickup
+            const firstPickupTimeStr = getRandomTimeInRange(FIRST_PICKUP_START_TIME, FIRST_PICKUP_END_TIME);
+            const firstPickupTimeMins = timeToMinutes(firstPickupTimeStr);
+
+            // 3. Calculate Route & Check Feasibility
+            statusDiv.textContent = `Run #${stats.totalRuns}... Calculating route (P:${numPickups}, S:${numSchools})...`;
+            detailStatusDiv.innerHTML = detailMessage; // Show bias info if applicable
+
+            // --- Feasibility Check 1 (Depot -> P1) ---
+            // Get the route just from the depot to the first pickup
+            const depotToFirstPickupCoords = [[depot.lon, depot.lat], [pickups[0].lon, pickups[0].lat]];
+            const depotToFirstPickupRoute = await getRoute(depotToFirstPickupCoords);
+            // If OSRM fails, stop processing this step and schedule the next
+            if (!depotToFirstPickupRoute) { if (simulationRunning) simulationTimeoutId = setTimeout(runSimulationStep, SIMULATION_DELAY_MS * 2); return; } // Longer delay after error
+
+            // Check On-Time Arrival at P1
+            const travelTimeToFirstPickupMins = Math.ceil(depotToFirstPickupRoute.duration / 60);
+            // Calculate the latest time the vehicle can leave the depot
+            const latestDepartureTimeMins = firstPickupTimeMins - travelTimeToFirstPickupMins;
+            // Calculate the actual arrival time based on leaving at the latest possible moment
+            const actualArrivalMins = latestDepartureTimeMins + travelTimeToFirstPickupMins;
+            // Calculate how long the vehicle would wait if it arrived exactly on time
+            const waitTimeIfOnTime = firstPickupTimeMins - actualArrivalMins;
+            // Check if arrival is late OR if the wait time exceeds the maximum allowed
+            if (actualArrivalMins > firstPickupTimeMins || waitTimeIfOnTime > MAX_WAIT_FIRST_PICKUP_MINS) {
+                 statusDiv.textContent = `Run #${stats.totalRuns}: Infeasible - Cannot reach first pickup on time.`;
+                 statusDiv.className = 'text-center mb-6 p-3 rounded-lg min-h-[3rem] flex items-center justify-center transition-colors duration-300 bg-red-200 text-red-800'; // Red for time infeasibility
+                 detailStatusDiv.innerHTML = "&nbsp;"; updateStatsUI();
+                 if (simulationRunning) simulationTimeoutId = setTimeout(runSimulationStep, SIMULATION_DELAY_MS); return;
+            }
+
+            // --- Simulate rest of route Sequentially (P1 -> Pn -> S1) ---
+            // Initialize current time, accounting for potential wait at P1
+            let currentTimeMins = firstPickupTimeMins + Math.min(waitTimeIfOnTime, MAX_WAIT_FIRST_PICKUP_MINS);
+            // Initialize total turns and duration with the Depot->P1 segment
+            let totalTurns = depotToFirstPickupRoute.turns;
+            let currentTotalDurationSeconds = depotToFirstPickupRoute.duration;
+            let p1_to_s1_duration_seconds = 0; // Track duration specifically from P1 to S1
+            let pickupSegmentResults = []; // Store results for each segment P(i) -> P(i+1) or P(n) -> S1
+
+            // Loop through pickup segments (P1->P2, P2->P3, ..., Pn->S1)
+            for (let i = 0; i < numPickups; i++) {
+                const startPoint = pickups[i];
+                // The endpoint is the next pickup, or the first school if this is the last pickup
+                const endPoint = (i + 1 < numPickups) ? pickups[i+1] : schools[0];
+                const segmentCoords = [[startPoint.lon, startPoint.lat], [endPoint.lon, endPoint.lat]];
+                statusDiv.textContent = `Run #${stats.totalRuns}... Calculating segment ${i + 1}/${numPickups}...`;
+                // Get route for this segment
+                const segmentRoute = await getRoute(segmentCoords);
+                if (!segmentRoute) { detailStatusDiv.innerHTML = "&nbsp;"; if (simulationRunning) simulationTimeoutId = setTimeout(runSimulationStep, SIMULATION_DELAY_MS * 2); return; } // Handle OSRM error
+
+                pickupSegmentResults.push(segmentRoute); // Store segment result
+                totalTurns += segmentRoute.turns; // Accumulate turns
+                currentTotalDurationSeconds += segmentRoute.duration; // Accumulate total duration (Depot->...->Current)
+                // Update current time by adding travel time for this segment
+                currentTimeMins += Math.ceil(segmentRoute.duration / 60);
+                // Add wait time for subsequent pickups (P2 onwards)
+                if (i > 0) currentTimeMins += MAX_WAIT_SUBSEQUENT_PICKUP_MINS;
+            }
+
+            // --- Feasibility Check 2: Max Travel Time P1 -> S1 ---
+            // Sum the durations of segments from P1 to S1
+            p1_to_s1_duration_seconds = pickupSegmentResults.reduce((sum, route) => sum + route.duration, 0);
+            const p1_to_s1_duration_minutes = Math.ceil(p1_to_s1_duration_seconds / 60);
+            // Check against the maximum allowed travel time
+            if (p1_to_s1_duration_minutes > MAX_TRAVEL_TIME_P1_TO_S1_MINS) {
+                 statusDiv.textContent = `Run #${stats.totalRuns}: Infeasible - Travel P1->S1 (${p1_to_s1_duration_minutes} min) > max (${MAX_TRAVEL_TIME_P1_TO_S1_MINS} min).`;
+                 statusDiv.className = 'text-center mb-6 p-3 rounded-lg min-h-[3rem] flex items-center justify-center transition-colors duration-300 bg-red-200 text-red-800';
+                 detailStatusDiv.innerHTML = "&nbsp;"; updateStatsUI();
+                 if (simulationRunning) simulationTimeoutId = setTimeout(runSimulationStep, SIMULATION_DELAY_MS); return;
+            }
+
+            // --- Feasibility Check 3: Arrival at First School ---
+            // Get the session time for the first school
+            const firstSchoolSessionTimeMins = timeToMinutes(schools[0].sessionTime);
+            // Check if the calculated arrival time is later than the session time
+            if (currentTimeMins > firstSchoolSessionTimeMins) {
+                statusDiv.textContent = `Run #${stats.totalRuns}: Infeasible - Arrived at first school late (Est: ${addMinutesToTime("00:00", currentTimeMins)} vs Session: ${schools[0].sessionTime}).`;
+                statusDiv.className = 'text-center mb-6 p-3 rounded-lg min-h-[3rem] flex items-center justify-center transition-colors duration-300 bg-red-200 text-red-800';
+                 detailStatusDiv.innerHTML = "&nbsp;"; updateStatsUI();
+                if (simulationRunning) simulationTimeoutId = setTimeout(runSimulationStep, SIMULATION_DELAY_MS); return;
+            }
+
+            // --- Route is Feasible! ---
+            // If all checks passed, increment feasible count and update aggregate stats
+            stats.feasibleRoutes++;
+            stats.totalFeasiblePickups += numPickups;
+            stats.totalFeasibleSchools += numSchools;
+            stats.totalFeasibleTurns += totalTurns;
+            stats.totalFeasibleDuration += currentTotalDurationSeconds; // Use duration up to S1 for stats/bias
+            stats.totalFeasibleFarthestDist += depotToFarthestPickupDist;
+
+            // Recalculate averages based on new feasible route
+            stats.avgPickups = stats.feasibleRoutes > 0 ? stats.totalFeasiblePickups / stats.feasibleRoutes : (MIN_PICKUPS + MAX_PICKUPS) / 2;
+            stats.avgSchools = stats.feasibleRoutes > 0 ? stats.totalFeasibleSchools / stats.feasibleRoutes : (1 + MAX_SCHOOLS) / 2;
+            const oldAvgTurns = stats.avgTurns; // Store old averages for comparison
+            const oldAvgDuration = stats.avgDuration;
+            const oldAvgFarthestDist = stats.avgFarthestDist;
+            stats.avgTurns = stats.feasibleRoutes > 0 ? stats.totalFeasibleTurns / stats.feasibleRoutes : null;
+            stats.avgDuration = stats.feasibleRoutes > 0 ? stats.totalFeasibleDuration / stats.feasibleRoutes : null;
+            stats.avgFarthestDist = stats.feasibleRoutes > 0 ? stats.totalFeasibleFarthestDist / stats.feasibleRoutes : null;
+
+            // Adjust Bias Probability based on performance vs average (heuristic learning)
+            let biasAdjustmentMsg = "";
+            if (oldAvgTurns !== null && oldAvgDuration !== null && oldAvgFarthestDist !== null) {
+                // Check if current route is significantly better than average in all metrics
+                const betterTurns = totalTurns < oldAvgTurns * 0.9;
+                const betterDuration = currentTotalDurationSeconds < oldAvgDuration * 0.9;
+                const betterDistance = depotToFarthestPickupDist < oldAvgFarthestDist * 0.9;
+                // Check if current route is significantly worse than average in any metric
+                const worseTurns = totalTurns > oldAvgTurns * 1.1;
+                const worseDuration = currentTotalDurationSeconds > oldAvgDuration * 1.1;
+                const worseDistance = depotToFarthestPickupDist > oldAvgFarthestDist * 1.1;
+
+                if (betterTurns && betterDuration && betterDistance) {
+                    // Increase bias probability if better in all metrics
+                    currentBiasProbability = Math.min(MAX_BIAS_PROBABILITY, currentBiasProbability + BIAS_ADJUSTMENT_STEP); biasAdjustmentMsg = " (Bias Increased)";
+                } else if (worseTurns || worseDuration || worseDistance) {
+                    // Decrease bias probability if worse in any metric
+                    currentBiasProbability = Math.max(MIN_BIAS_PROBABILITY, currentBiasProbability - BIAS_ADJUSTMENT_STEP); biasAdjustmentMsg = " (Bias Decreased)";
+                }
+            }
+
+            // Update chart using distance (x) and turns (y)
+            const addedToFrontier = updateChart(depotToFarthestPickupDist, totalTurns);
+
+            // Update status display for feasible route
+            statusDiv.textContent = `Run #${stats.totalRuns}: Feasible! Dist: ${depotToFarthestPickupDist.toFixed(1)}km, Turns: ${totalTurns}, Duration: ${Math.round(currentTotalDurationSeconds/60)}min. Plotting...`;
+            statusDiv.className = 'text-center mb-6 p-3 rounded-lg min-h-[3rem] flex items-center justify-center transition-colors duration-300 bg-green-200 text-green-800'; // Green for feasible
+            detailStatusDiv.textContent = (addedToFrontier ? "Added to Efficient Frontier!" : "(Not added to frontier)") + biasAdjustmentMsg;
+
+             // Construct coordinate list for the *full* route map display (Depot -> P... -> S...)
+             let finalMapCoords = [[depot.lon, depot.lat]];
+             pickups.forEach(p => finalMapCoords.push([p.lon, p.lat]));
+             schools.forEach(s => finalMapCoords.push([s.lon, s.lat]));
+
+
+            // Get full route geometry for map display (this call includes schools beyond S1 if any)
+            statusDiv.textContent = `Run #${stats.totalRuns}: Feasible! Fetching full route geometry for map...`;
+            const fullRouteForMap = await getRoute(finalMapCoords);
+            if (!fullRouteForMap) { // Handle error fetching final geometry
+                 statusDiv.textContent = `Run #${stats.totalRuns}: Feasible, but error fetching full route geometry for map.`;
+                 statusDiv.className = 'text-center mb-6 p-3 rounded-lg min-h-[3rem] flex items-center justify-center transition-colors duration-300 bg-yellow-200 text-yellow-800';
+                 // Still update min stats even if map display fails
+                 stats.minTurns = Math.min(stats.minTurns, totalTurns); stats.minFarthestDist = Math.min(stats.minFarthestDist, depotToFarthestPickupDist);
+                 updateStatsUI();
+                 if (simulationRunning) simulationTimeoutId = setTimeout(runSimulationStep, SIMULATION_DELAY_MS); return;
+             }
+
+            // Add feasible route to map, update min stats
+            displayRouteOnMap(depot, pickups, schools, fullRouteForMap.geometry);
+            stats.minTurns = Math.min(stats.minTurns, totalTurns);
+            stats.minFarthestDist = Math.min(stats.minFarthestDist, depotToFarthestPickupDist);
+            updateStatsUI(); // Update displayed stats
+
+            // Schedule the next simulation step if still running
+            if (simulationRunning) { simulationTimeoutId = setTimeout(runSimulationStep, SIMULATION_DELAY_MS); }
+        }
+
+        // --- Update Stats UI ---
+        /** Updates the text content of the statistics display elements */
+         function updateStatsUI() {
+            totalRunsSpan.textContent = stats.totalRuns;
+            feasibleRoutesSpan.textContent = stats.feasibleRoutes;
+            frontierPointsSpan.textContent = stats.efficientFrontierPoints.length;
+            minTurnsSpan.textContent = stats.minTurns === Infinity ? '-' : stats.minTurns;
+            minFarthestDistSpan.textContent = stats.minFarthestDist === Infinity ? '-' : stats.minFarthestDist.toFixed(1);
+            avgPickupsStatSpan.textContent = stats.feasibleRoutes > 0 ? stats.avgPickups.toFixed(1) : '-';
+            avgSchoolsStatSpan.textContent = stats.feasibleRoutes > 0 ? stats.avgSchools.toFixed(1) : '-';
+            avgTurnsStatSpan.textContent = stats.avgTurns !== null ? stats.avgTurns.toFixed(1) : '-';
+            avgDurationStatSpan.textContent = stats.avgDuration !== null ? Math.round(stats.avgDuration / 60).toFixed(0) : '-';
+            avgFarthestDistStatSpan.textContent = stats.avgFarthestDist !== null ? stats.avgFarthestDist.toFixed(1) : '-';
+            biasProbStatSpan.textContent = (currentBiasProbability * 100).toFixed(0);
+        }
+
+         /** Populate constraints display values once on load */
+         function populateConstraintsDisplay() {
+             depotCoordsSpan.textContent = `${FIXED_DEPOT_LAT.toFixed(4)}, ${FIXED_DEPOT_LON.toFixed(4)}`;
+             pickupRangeSpan.textContent = MIN_PICKUPS; maxPickupsSpan.textContent = MAX_PICKUPS;
+             schoolRangeSpan.textContent = 1; maxSchoolsSpan.textContent = MAX_SCHOOLS;
+             maxPickupDistConstraintSpan.textContent = MAX_DEPOT_FARTHEST_PICKUP_MILES;
+             pickupTimeRangeSpan.textContent = `${FIRST_PICKUP_START_TIME} AM - ${minutesToTime(timeToMinutes(FIRST_PICKUP_END_TIME)-1)} AM`;
+             // Dynamically set the school time range display based on constants
+             schoolTimeRangeSpan.textContent = `${SCHOOL_SESSION_START_TIME} AM - ${minutesToTime(timeToMinutes(SCHOOL_SESSION_END_TIME)-1)} AM`;
+             waitP1Span.textContent = MAX_WAIT_FIRST_PICKUP_MINS; waitSubseqSpan.textContent = MAX_WAIT_SUBSEQUENT_PICKUP_MINS;
+             // Note: Max Travel P1->S1 is hardcoded in the HTML list item text
+         }
+
+         /** Helper function to stop simulation and update UI state */
+         function stopSimulation() {
+             if (!simulationRunning) return; // Do nothing if already stopped
+             simulationRunning = false; // Set flag
+             startButton.disabled = false; // Enable start button
+             stopButton.disabled = true; // Disable stop button
+             // Clear the timeout to prevent the next step from running
+             if (simulationTimeoutId) { clearTimeout(simulationTimeoutId); simulationTimeoutId = null; }
+             detailStatusDiv.innerHTML = "&nbsp;"; // Clear detail status
+         }
+
+        // --- Event Listeners ---
+        /** Handles click on the Start Simulation button */
+        startButton.addEventListener('click', () => {
+            if (simulationRunning) return; // Prevent multiple starts
+            simulationRunning = true;
+            startButton.disabled = true; stopButton.disabled = false; // Update button states
+            // Initial status message
+            statusDiv.textContent = 'Starting simulation... Clearing map & chart...';
+            statusDiv.className = 'text-center mb-6 p-3 rounded-lg min-h-[3rem] flex items-center justify-center transition-colors duration-300 bg-gray-200 text-gray-700';
+            detailStatusDiv.innerHTML = "&nbsp;";
+            // Clear previous results
+            clearMap();
+            feasibleRouteData = []; stats.efficientFrontierPoints = [];
+            // Reset chart data
+            if (chart) { chart.data.datasets[0].data = feasibleRouteData; chart.data.datasets[1].data = stats.efficientFrontierPoints; chart.update(); }
+            // Reset statistics object
+            stats = {
+                totalRuns: 0, feasibleRoutes: 0, minTurns: Infinity, minFarthestDist: Infinity,
+                totalFeasiblePickups: 0, totalFeasibleSchools: 0,
+                totalFeasibleTurns: 0, totalFeasibleDuration: 0, totalFeasibleFarthestDist: 0,
+                avgPickups: (MIN_PICKUPS + MAX_PICKUPS) / 2, avgSchools: (1 + MAX_SCHOOLS) / 2,
+                avgTurns: null, avgDuration: null, avgFarthestDist: null,
+                efficientFrontierPoints: []
+            };
+            currentBiasProbability = BASE_LEARNING_BIAS_PROBABILITY; // Reset bias probability
+
+            updateStatsUI(); // Update display with reset stats
+            initializeMap(); // Ensure map is initialized
+            initializeChart(); // Ensure chart is initialized
+            runSimulationStep(); // Start the first simulation step
+        });
+        /** Handles click on the Stop Simulation button */
+        stopButton.addEventListener('click', () => {
+             if (simulationRunning) {
+                 statusDiv.textContent = 'Simulation stopped by user.';
+                 statusDiv.className = 'text-center mb-6 p-3 rounded-lg min-h-[3rem] flex items-center justify-center transition-colors duration-300 bg-gray-200 text-gray-700';
+                 stopSimulation(); // Call the helper function to stop
+             }
+         });
+
+        // --- Initial Setup ---
+        /** Runs when the page finishes loading */
+        window.onload = () => {
+            initializeMap(); // Initialize map on load
+            initializeChart(); // Initialize chart on load
+            populateConstraintsDisplay(); // Fill in constraint values in the list
+            updateStatsUI(); // Display initial stats (zeros and defaults)
+        };
+
+    </script>
+
+</body>
+</html>
